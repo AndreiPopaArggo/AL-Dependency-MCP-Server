@@ -904,11 +904,22 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
       // Get procedures
       const allProcedures = this.database.getObjectProcedures(targetObject.Name);
       
-      // Categorize procedures intelligently
+      // Categorize procedures using attributes (accurate) and naming patterns (fallback)
       const categories: { [key: string]: { count: number; examples: string[] } } = {};
       const keyProcedures: string[] = [];
 
-      // Define procedure categories based on naming patterns
+      // Helper to add to category
+      const addToCategory = (categoryName: string, procName: string) => {
+        if (!categories[categoryName]) {
+          categories[categoryName] = { count: 0, examples: [] };
+        }
+        categories[categoryName].count++;
+        if (categories[categoryName].examples.length < 5) {
+          categories[categoryName].examples.push(procName);
+        }
+      };
+
+      // Name-based patterns (fallback when no attributes)
       const categoryPatterns = {
         'Main Entry Points': /^(Run|Execute|Process|Main|Start)/i,
         'Validation & Checks': /^(Check|Validate|Test|Verify|Ensure)/i,
@@ -922,32 +933,37 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
       // Categorize each procedure
       for (const proc of allProcedures) {
         let categorized = false;
-        
-        for (const [categoryName, pattern] of Object.entries(categoryPatterns)) {
-          if (pattern.test(proc.Name)) {
-            if (!categories[categoryName]) {
-              categories[categoryName] = { count: 0, examples: [] };
-            }
-            categories[categoryName].count++;
-            
-            // Add to examples (max 5 per category)
-            if (categories[categoryName].examples.length < 5) {
-              categories[categoryName].examples.push(proc.Name);
-            }
+
+        // First: attribute-based categorization (most accurate)
+        if (proc.Attributes && proc.Attributes.length > 0) {
+          const attrNames = proc.Attributes.map((a: any) => a.Name);
+
+          if (attrNames.includes('IntegrationEvent') || attrNames.includes('BusinessEvent') || attrNames.includes('InternalEvent')) {
+            addToCategory('Event Publishers', proc.Name);
             categorized = true;
-            break;
+          } else if (attrNames.includes('EventSubscriber')) {
+            addToCategory('Event Subscribers', proc.Name);
+            categorized = true;
+          } else if (attrNames.includes('Obsolete')) {
+            addToCategory('Obsolete (deprecated)', proc.Name);
+            categorized = true;
           }
         }
 
-        // If not categorized, put in "Other"
+        // Fallback: name-based categorization
         if (!categorized) {
-          if (!categories['Other Functions']) {
-            categories['Other Functions'] = { count: 0, examples: [] };
+          for (const [categoryName, pattern] of Object.entries(categoryPatterns)) {
+            if (pattern.test(proc.Name)) {
+              addToCategory(categoryName, proc.Name);
+              categorized = true;
+              break;
+            }
           }
-          categories['Other Functions'].count++;
-          if (categories['Other Functions'].examples.length < 3) {
-            categories['Other Functions'].examples.push(proc.Name);
-          }
+        }
+
+        // If still not categorized, put in "Other"
+        if (!categorized) {
+          addToCategory('Other Functions', proc.Name);
         }
 
         // Identify key procedures (likely entry points)

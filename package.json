@@ -51,8 +51,6 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.4",
     "fast-glob": "^3.3.3",
-    "glob": "^11.0.3",
-    "stream-json": "^1.9.1",
     "yauzl": "^3.2.0"
   },
   "devDependencies": {

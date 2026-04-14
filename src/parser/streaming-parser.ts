@@ -1,17 +1,21 @@
 import { Readable } from 'stream';
 import { ZipFallbackExtractor } from './zip-fallback';
-import { 
-  ALSymbolReference, 
-  ALNamespace, 
-  ALObject, 
-  ALTable, 
-  ALPage, 
-  ALCodeunit, 
-  ALReport, 
+import {
+  ALSymbolReference,
+  ALNamespace,
+  ALObject,
+  ALTable,
+  ALPage,
+  ALCodeunit,
+  ALReport,
   ALEnum,
   ALField,
   ALProcedure,
-  ALProperty
+  ALProperty,
+  ALVariable,
+  ALAttribute,
+  ALAction,
+  ALControl
 } from '../types/al-types';
 
 export interface ParseProgress {
@@ -321,6 +325,16 @@ export class StreamingSymbolParser {
       table.Procedures = data.Procedures.map((procData: any) => this.parseProcedure(procData));
     }
 
+    table.Variables = this.parseVariables(data);
+
+    // Capture FieldGroups (DropDown, Brick, etc.)
+    if (data.FieldGroups && Array.isArray(data.FieldGroups)) {
+      (table as any).FieldGroups = data.FieldGroups.map((fg: any) => ({
+        Name: fg.Name || '',
+        FieldNames: fg.FieldNames || []
+      }));
+    }
+
     return table;
   }
 
@@ -329,17 +343,30 @@ export class StreamingSymbolParser {
    */
   private parsePage(data: any, baseObject: ALObject): ALPage {
     const page = baseObject as ALPage;
-    
+
     // Extract source table from properties
     const sourceTableProperty = this.findProperty(data.Properties, 'SourceTable');
     if (sourceTableProperty) {
       page.SourceTable = sourceTableProperty.Value;
     }
 
-    // TODO: Parse controls hierarchy
     if (data.Controls) {
       page.Controls = data.Controls.map((controlData: any) => this.parseControl(controlData));
     }
+
+    // Parse page actions
+    if (data.Actions) {
+      page.Actions = data.Actions.map((actionData: any) => this.parseAction(actionData));
+    }
+
+    // Parse methods (triggers and action code)
+    if (data.Methods) {
+      (page as any).Procedures = data.Methods.map((methodData: any) => this.parseProcedure(methodData));
+    } else if (data.Procedures) {
+      (page as any).Procedures = data.Procedures.map((procData: any) => this.parseProcedure(procData));
+    }
+
+    page.Variables = this.parseVariables(data);
 
     return page;
   }
@@ -349,12 +376,21 @@ export class StreamingSymbolParser {
    */
   private parseCodeunit(data: any, baseObject: ALObject): ALCodeunit {
     const codeunit = baseObject as ALCodeunit;
-    
+
     // AL symbol files use "Methods" instead of "Procedures"
     if (data.Methods) {
       codeunit.Procedures = data.Methods.map((methodData: any) => this.parseProcedure(methodData));
     } else if (data.Procedures) {
       codeunit.Procedures = data.Procedures.map((procData: any) => this.parseProcedure(procData));
+    }
+
+    codeunit.Variables = this.parseVariables(data);
+
+    // Capture implemented interfaces (format: #appid#"Interface Name")
+    if (data.ImplementedInterfaces && Array.isArray(data.ImplementedInterfaces)) {
+      (codeunit as any).ImplementedInterfaces = data.ImplementedInterfaces.map(
+        (iface: string) => this.extractTargetObjectName(iface)
+      );
     }
 
     return codeunit;
@@ -381,6 +417,15 @@ export class StreamingSymbolParser {
         DataItems: dataItem.DataItems ? this.parseDataItems(dataItem.DataItems) : undefined
       }));
     }
+
+    // Parse methods (triggers)
+    if (data.Methods) {
+      (report as any).Procedures = data.Methods.map((methodData: any) => this.parseProcedure(methodData));
+    } else if (data.Procedures) {
+      (report as any).Procedures = data.Procedures.map((procData: any) => this.parseProcedure(procData));
+    }
+
+    report.Variables = this.parseVariables(data);
 
     return report;
   }
@@ -556,12 +601,22 @@ export class StreamingSymbolParser {
       (baseObject as any).Fields = data.Fields.map((fieldData: any) => this.parseField(fieldData));
     }
 
+    if (data.Keys) {
+      (baseObject as any).Keys = data.Keys.map((keyData: any) => ({
+        Fields: keyData.FieldNames || keyData.Fields || [],
+        Properties: this.parseProperties(keyData.Properties),
+        Name: keyData.Name
+      }));
+    }
+
     // AL symbol files use "Methods" for procedures
     if (data.Methods) {
       (baseObject as any).Procedures = data.Methods.map((methodData: any) => this.parseProcedure(methodData));
     } else if (data.Procedures) {
       (baseObject as any).Procedures = data.Procedures.map((procData: any) => this.parseProcedure(procData));
     }
+
+    (baseObject as any).Variables = this.parseVariables(data);
 
     return baseObject;
   }
@@ -579,6 +634,19 @@ export class StreamingSymbolParser {
     if (data.ControlChanges) {
       (baseObject as any).ControlChanges = data.ControlChanges;
     }
+
+    if (data.ActionChanges) {
+      (baseObject as any).ActionChanges = data.ActionChanges;
+    }
+
+    // Page extensions can have methods and variables
+    if (data.Methods) {
+      (baseObject as any).Procedures = data.Methods.map((methodData: any) => this.parseProcedure(methodData));
+    } else if (data.Procedures) {
+      (baseObject as any).Procedures = data.Procedures.map((procData: any) => this.parseProcedure(procData));
+    }
+
+    (baseObject as any).Variables = this.parseVariables(data);
 
     return baseObject;
   }
@@ -630,6 +698,13 @@ export class StreamingSymbolParser {
       }));
     }
 
+    // Report extensions can have methods and variables
+    if (data.Methods) {
+      (baseObject as any).Procedures = data.Methods.map((methodData: any) => this.parseProcedure(methodData));
+    }
+
+    (baseObject as any).Variables = this.parseVariables(data);
+
     return baseObject;
   }
 
@@ -672,11 +747,41 @@ export class StreamingSymbolParser {
       Properties: this.parseProperties(data.Properties)
     };
 
+    // Capture method ID
+    if (data.Id !== undefined) {
+      procedure.Id = data.Id;
+    }
+
+    // Capture method kind (0=Method, 1=Trigger, etc.)
+    if (data.MethodKind !== undefined) {
+      procedure.MethodKind = data.MethodKind;
+    }
+
+    // Capture visibility flags
+    if (data.IsLocal) {
+      procedure.IsLocal = true;
+    }
+    if (data.IsInternal) {
+      procedure.IsInternal = true;
+    }
+    if (data.IsProtected) {
+      procedure.IsProtected = true;
+    }
+
+    // Capture attributes (IntegrationEvent, BusinessEvent, EventSubscriber,
+    // Obsolete, NonDebuggable, TryFunction, Scope, CommitBehavior, etc.)
+    if (data.Attributes && Array.isArray(data.Attributes) && data.Attributes.length > 0) {
+      procedure.Attributes = data.Attributes.map((attr: any) => ({
+        Name: attr.Name || '',
+        Arguments: attr.Arguments
+      }));
+    }
+
     if (data.ReturnTypeDefinition) {
       procedure.ReturnTypeDefinition = {
         Name: data.ReturnTypeDefinition.Name,
         Length: data.ReturnTypeDefinition.Length,
-        SubtypeDefinition: data.ReturnTypeDefinition.SubtypeDefinition
+        SubtypeDefinition: data.ReturnTypeDefinition.SubtypeDefinition || data.ReturnTypeDefinition.Subtype
       };
     }
 
@@ -686,9 +791,9 @@ export class StreamingSymbolParser {
         TypeDefinition: {
           Name: paramData.TypeDefinition?.Name || 'Unknown',
           Length: paramData.TypeDefinition?.Length,
-          SubtypeDefinition: paramData.TypeDefinition?.SubtypeDefinition
+          SubtypeDefinition: paramData.TypeDefinition?.SubtypeDefinition || paramData.TypeDefinition?.Subtype
         },
-        ByReference: paramData.ByReference || false
+        IsVar: paramData.IsVar || false
       }));
     }
 
@@ -696,15 +801,71 @@ export class StreamingSymbolParser {
   }
 
   /**
-   * Parse control definition (basic implementation)
+   * Parse variable definition
    */
-  private parseControl(data: any): any {
+  private parseVariable(data: any): ALVariable {
+    const variable: ALVariable = {
+      Name: data.Name || '',
+      TypeDefinition: data.TypeDefinition ? {
+        Name: data.TypeDefinition.Name || 'Unknown',
+        Length: data.TypeDefinition.Length,
+        SubtypeDefinition: data.TypeDefinition.SubtypeDefinition || data.TypeDefinition.Subtype
+      } : undefined
+    };
+
+    if (data.Protected) {
+      variable.Protected = true;
+    }
+
+    if (data.Attributes && Array.isArray(data.Attributes) && data.Attributes.length > 0) {
+      variable.Attributes = data.Attributes.map((attr: any) => ({
+        Name: attr.Name || '',
+        Arguments: attr.Arguments
+      }));
+    }
+
+    return variable;
+  }
+
+  /**
+   * Parse variables array from an object
+   */
+  private parseVariables(data: any): ALVariable[] | undefined {
+    if (!data.Variables || !Array.isArray(data.Variables) || data.Variables.length === 0) {
+      return undefined;
+    }
+    return data.Variables.map((v: any) => this.parseVariable(v));
+  }
+
+  /**
+   * Parse action definition (page actions are recursive like controls)
+   */
+  private parseAction(data: any): ALAction {
     return {
       Id: data.Id || 0,
       Name: data.Name || '',
-      Type: data.Type || 'Control',
+      Kind: data.Kind,
       Properties: this.parseProperties(data.Properties),
-      Controls: data.Controls ? data.Controls.map((ctrl: any) => this.parseControl(ctrl)) : []
+      Actions: data.Actions ? data.Actions.map((a: any) => this.parseAction(a)) : undefined,
+      TargetId: data.TargetId,
+      TargetName: data.TargetName
+    };
+  }
+
+  /**
+   * Parse control definition
+   */
+  private parseControl(data: any): ALControl {
+    return {
+      Id: data.Id || 0,
+      Name: data.Name || '',
+      Kind: data.Kind,
+      Properties: this.parseProperties(data.Properties),
+      Controls: data.Controls ? data.Controls.map((ctrl: any) => this.parseControl(ctrl)) : undefined,
+      Actions: data.Actions ? data.Actions.map((a: any) => this.parseAction(a)) : undefined,
+      RelatedPagePartId: data.RelatedPagePartId,
+      SystemPartKind: data.SystemPartKind,
+      TypeDefinition: data.TypeDefinition
     };
   }
 

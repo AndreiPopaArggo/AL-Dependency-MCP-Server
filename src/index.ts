@@ -446,10 +446,32 @@ export class ALMCPServer {
   }
 
   async start(): Promise<void> {
-    // Don't auto-initialize here - wait for first tool call for better performance
+    // If AL_PACKAGES_PATH is set, pre-load packages before accepting connections
+    const packagesPath = process.env.AL_PACKAGES_PATH;
+    if (packagesPath) {
+      try {
+        await this.setupALCli();
+        // Support multiple paths separated by ; (e.g. "/opt/al-mcp/bc26/.alpackages;/opt/al-mcp/bc27/.alpackages")
+        const paths = packagesPath.split(';').map(p => p.trim()).filter(p => p);
+        let totalObjects = 0, totalPackages = 0, totalMs = 0;
+        for (const p of paths) {
+          console.error(`Loading packages from ${p}...`);
+          const result = await this.tools.loadPackages({ packagesPath: p, forceReload: false });
+          totalObjects += result.totalObjects;
+          totalPackages += result.packages.length;
+          totalMs += result.loadTimeMs;
+        }
+        console.error(`Pre-loaded ${totalObjects} objects from ${totalPackages} packages in ${totalMs}ms`);
+        this.isInitialized = true;
+      } catch (error) {
+        console.error(`Pre-load failed: ${error instanceof Error ? error.message : error}`);
+        console.error('Server will continue — use al_packages to load manually');
+      }
+    }
+
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error('AL MCP Server started successfully (packages will be auto-loaded on first use)');
+    console.error('AL MCP Server ready');
   }
 
   // Public methods for testing

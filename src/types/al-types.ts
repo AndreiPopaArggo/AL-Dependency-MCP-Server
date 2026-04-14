@@ -31,22 +31,27 @@ export interface ALTable extends ALObject {
   Fields?: ALField[];
   Keys?: ALKey[];
   Procedures?: ALProcedure[];
+  Variables?: ALVariable[];
 }
 
 export interface ALPage extends ALObject {
   Type: 'Page';
   Controls?: ALControl[];
+  Actions?: ALAction[];
   SourceTable?: string;
+  Variables?: ALVariable[];
 }
 
 export interface ALCodeunit extends ALObject {
   Type: 'Codeunit';
   Procedures?: ALProcedure[];
+  Variables?: ALVariable[];
 }
 
 export interface ALReport extends ALObject {
   Type: 'Report';
   Dataset?: ALDataItem[];
+  Variables?: ALVariable[];
 }
 
 export interface ALEnum extends ALObject {
@@ -77,18 +82,51 @@ export interface ALKey {
   Name?: string;
 }
 
+export interface ALAction {
+  Id: number;
+  Name: string;
+  Kind?: number;
+  Properties?: ALProperty[];
+  Actions?: ALAction[];      // Nested actions
+  TargetId?: number;
+  TargetName?: string;
+}
+
 export interface ALControl {
   Id: number;
   Name: string;
-  Type: string;
+  Kind?: number;
+  Type?: string;
   Properties: ALProperty[];
-  Controls?: ALControl[]; // Nested controls
-  SourceExpr?: string;     // Field reference for control
-  SourceTable?: string;    // Table reference for control
+  Controls?: ALControl[];    // Nested controls
+  Actions?: ALAction[];      // Actions within controls
+  SourceExpr?: string;       // Field reference for control
+  SourceTable?: string;      // Table reference for control
+  RelatedPagePartId?: number;
+  SystemPartKind?: number;
+  TypeDefinition?: ALTypeDefinition;
+}
+
+export interface ALAttribute {
+  Name: string;
+  Arguments?: { Value: string }[];
+}
+
+export interface ALVariable {
+  Name: string;
+  TypeDefinition?: ALTypeDefinition;
+  Protected?: boolean;
+  Attributes?: ALAttribute[];
 }
 
 export interface ALProcedure {
+  Id?: number;
   Name: string;
+  MethodKind?: number;
+  IsLocal?: boolean;
+  IsInternal?: boolean;
+  IsProtected?: boolean;
+  Attributes?: ALAttribute[];
   ReturnTypeDefinition?: ALTypeDefinition;
   Parameters?: ALParameter[];
   Properties?: ALProperty[];
@@ -97,7 +135,7 @@ export interface ALProcedure {
 export interface ALParameter {
   Name: string;
   TypeDefinition: ALTypeDefinition;
-  ByReference?: boolean;
+  IsVar?: boolean;
 }
 
 export interface ALDataItem {

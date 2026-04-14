@@ -78,8 +78,9 @@ export class OptimizedSymbolDatabase implements ALSymbolDatabase {
 
     // Start with name-based lookup
     if (normalizedPattern.includes('*')) {
-      // Wildcard search - iterate through all names
-      const regex = new RegExp(normalizedPattern.replace(/\*/g, '.*'));
+      // Wildcard search — escape regex special chars, then convert * to .*
+      const escaped = normalizedPattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(escaped.replace(/\*/g, '.*'));
       for (const [name, objects] of this.objectsByName) {
         if (regex.test(name)) {
           candidates.push(...objects);
