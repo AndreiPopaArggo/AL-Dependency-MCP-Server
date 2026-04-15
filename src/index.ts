@@ -56,7 +56,7 @@ export class ALMCPServer {
         tools: [
           {
             name: 'al_search_objects',
-            description: 'Search AL objects in YOUR WORKSPACE (.app packages). Analyzes compiled AL code structure. Use summaryMode:true & limit for token efficiency. For complex objects prefer al_get_object_summary. Supports domain filtering.',
+            description: 'Find AL objects by name, type, or business domain. Use this to discover which objects exist (e.g. "what tables relate to sales?"). Returns names, IDs, and types. Keep includeFields and includeProcedures false to avoid large responses — use al_get_object_summary or al_get_object_definition to inspect a specific object.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -108,7 +108,7 @@ export class ALMCPServer {
           },
           {
             name: 'al_get_object_definition',
-            description: 'Get AL object definition from YOUR WORKSPACE. Retrieves compiled code structure by ID or name. Use summaryMode:true for token efficiency. Use limits for large objects.',
+            description: 'Get the full definition of a known AL object — all fields with types and properties, procedure signatures with parameters, variables, and keys. Use this when you need exact field types, procedure parameters, or complete structural detail. Use fieldLimit/procedureLimit to control response size. For a lighter overview, prefer al_get_object_summary.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -157,7 +157,7 @@ export class ALMCPServer {
           },
           {
             name: 'al_find_references',
-            description: 'Find object/field references in YOUR WORKSPACE. Tracks extensions, variables, parameters, field usage, and table relations across all object types.',
+            description: 'Find cross-object relationships — what extends, uses, or references a given AL object or field. Use this to trace dependencies: table extensions, field usage across codeunits/pages/reports, table relations, variable declarations, and parameters.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -190,7 +190,7 @@ export class ALMCPServer {
           },
           {
             name: 'al_search_object_members',
-            description: 'Search procedures, fields, controls, or dataitems within an object in YOUR WORKSPACE. Unified search for all object child elements.',
+            description: 'Search within a specific AL object for procedures, fields, controls, or dataitems by name pattern. Use this when you know the object but need to find a specific member inside it (e.g. "find all Post* procedures in codeunit Sales-Post"). For page controls, returns the full layout path (e.g. content > Item > Base Unit of Measure). Use the group parameter to restrict control search to a specific fast tab.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -211,6 +211,10 @@ export class ALMCPServer {
                 pattern: {
                   type: 'string',
                   description: 'Filter pattern (wildcards supported)',
+                },
+                group: {
+                  type: 'string',
+                  description: 'For controls only: restrict search to a specific group/tab by name (e.g. "Item" to search only the Item fast tab)',
                 },
                 limit: {
                   type: 'number',
@@ -233,7 +237,7 @@ export class ALMCPServer {
           },
           {
             name: 'al_get_object_summary',
-            description: '✅ TOKEN EFFICIENT: Get categorized overview of AL object in YOUR WORKSPACE. Intelligent procedure grouping with 96% token reduction vs full definition.',
+            description: 'Get a high-level overview of a known AL object — procedure categories, field groups, and key structure. Use this as the default way to understand what an object does before drilling into details with al_get_object_definition.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -251,32 +255,31 @@ export class ALMCPServer {
             },
           },
           {
-            name: 'al_packages',
-            description: 'Package management: load compiled .app packages, list loaded packages, or get stats. Auto-discovers .alpackages if path provided.',
+            name: 'al_get_source',
+            description: 'Get AL source code for a standard BC object or a specific member (procedure body, field declaration, trigger). Use this when you need the actual implementation code — not just the structure from al_get_object_definition. Requires BC source files on the server.',
             inputSchema: {
               type: 'object',
               properties: {
-                action: {
+                objectName: {
                   type: 'string',
-                  description: 'Action to perform',
-                  enum: ['load', 'list', 'stats'],
+                  description: 'Object name (e.g. "Sales-Post", "Item Card")',
                 },
-                path: {
+                objectType: {
                   type: 'string',
-                  description: 'Path to packages directory or AL project root (for load action)',
+                  description: 'Object type (optional, for disambiguation)',
+                  enum: ['Table', 'TableExtension', 'Page', 'PageExtension', 'Codeunit', 'Report', 'ReportExtension', 'Enum', 'EnumExtensionType', 'Interface', 'PermissionSet', 'PermissionSetExtension', 'XmlPort', 'Query'],
                 },
-                autoDiscover: {
-                  type: 'boolean',
-                  description: 'Auto-discover .alpackages directories (default: true for load)',
-                  default: true,
+                memberName: {
+                  type: 'string',
+                  description: 'Specific member to extract (e.g. "PostItemLine", "Base Unit of Measure"). Omit to get the object header.',
                 },
-                forceReload: {
-                  type: 'boolean',
-                  description: 'Force reload packages',
-                  default: false,
+                memberType: {
+                  type: 'string',
+                  description: 'Type of member to extract',
+                  enum: ['procedure', 'trigger', 'field', 'control'],
                 },
               },
-              required: ['action'],
+              required: ['objectName'],
             },
           },
         ],
@@ -357,71 +360,15 @@ export class ALMCPServer {
               ],
             };
 
-          case 'al_packages':
-            const action = (args as any)?.action;
-            const path = (args as any)?.path;
-            const autoDiscover = (args as any)?.autoDiscover !== false;
-            const forceReload = (args as any)?.forceReload || false;
-
-            switch (action) {
-              case 'load':
-                if (!path) {
-                  return {
-                    content: [
-                      {
-                        type: 'text',
-                        text: JSON.stringify({
-                          error: 'path parameter required for load action',
-                          message: 'Provide path to .alpackages directory or AL project root'
-                        }, null, 2),
-                      },
-                    ],
-                  };
-                }
-
-                if (autoDiscover) {
-                  return {
-                    content: [
-                      {
-                        type: 'text',
-                        text: JSON.stringify(await this.tools.autoDiscoverPackages(path), null, 2),
-                      },
-                    ],
-                  };
-                } else {
-                  return {
-                    content: [
-                      {
-                        type: 'text',
-                        text: JSON.stringify(await this.tools.loadPackages({ packagesPath: path, forceReload }), null, 2),
-                      },
-                    ],
-                  };
-                }
-
-              case 'list':
-                return {
-                  content: [
-                    {
-                      type: 'text',
-                      text: JSON.stringify(await this.tools.listPackages(), null, 2),
-                    },
-                  ],
-                };
-
-              case 'stats':
-                return {
-                  content: [
-                    {
-                      type: 'text',
-                      text: JSON.stringify(await this.tools.getDatabaseStats(), null, 2),
-                    },
-                  ],
-                };
-
-              default:
-                throw new Error(`Unknown action: ${action}. Use 'load', 'list', or 'stats'`);
-            }
+          case 'al_get_source':
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(await this.tools.getSourceSnippet(args as any), null, 2),
+                },
+              ],
+            };
 
           default:
             throw new Error(`Unknown tool: ${name}`);
@@ -502,17 +449,17 @@ export class ALMCPServer {
 
   private async performInitialization(): Promise<void> {
     try {
-      console.error('🔍 Setting up AL MCP Server...');
-      
+      console.error('Setting up AL MCP Server...');
+
       // Setup AL CLI
       await this.setupALCli();
 
       // No automatic package loading - require explicit tool calls
-      console.error('✅ AL MCP Server ready. Use al_auto_discover or al_load_packages to load AL symbols before searching.');
+      console.error('AL MCP Server ready. Use al_packages to load AL symbols before searching.');
 
       this.isInitialized = true;
     } catch (error) {
-      console.error('❌ Auto-initialization failed:', error);
+      console.error('Auto-initialization failed:', error);
       // Don't throw - allow server to continue with limited functionality
       this.isInitialized = true; // Prevent retry loops
     } finally {
@@ -521,26 +468,26 @@ export class ALMCPServer {
   }
 
   private async setupALCli(): Promise<void> {
-    console.error('🔍 Setting up AL CLI...');
-    
+    console.error('Setting up AL CLI...');
+
     const installer = new ALInstaller();
     const result = await installer.ensureALAvailable();
-    
+
     if (result.success) {
-      console.error(`✅ ${result.message}`);
+      console.error(result.message);
       if (result.alPath) {
         this.alCli.setALCommand(result.alPath);
       }
     } else {
-      console.error(`⚠️  ${result.message}`);
-      
+      console.error(result.message);
+
       if (result.requiresManualInstall) {
         console.error('');
         console.error(installer.getManualInstallInstructions());
       }
-      
-      console.error('⚡ Server will continue with limited functionality (symbol parsing will fail)');
-      console.error('   MCP tools will still work for basic operations and error reporting');
+
+      console.error('Server will continue with limited functionality (symbol parsing will fail)');
+      console.error('MCP tools will still work for basic operations and error reporting');
     }
   }
 }

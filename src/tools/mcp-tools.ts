@@ -24,12 +24,22 @@ import {
 import { ALObjectDefinition, ALFieldReference } from '../types/al-types';
 import { OptimizedSymbolDatabase } from '../core/symbol-database';
 import { ALPackageManager } from '../core/package-manager';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export class ALMCPTools {
+  private sourcePaths: string[] = [];
+
   constructor(
     private database: OptimizedSymbolDatabase,
     private packageManager: ALPackageManager
-  ) {}
+  ) {
+    // Initialize source paths from environment variable
+    const srcPath = process.env.AL_SOURCE_PATH;
+    if (srcPath) {
+      this.sourcePaths = srcPath.split(';').map(p => p.trim()).filter(p => p);
+    }
+  }
 
   /**
    * Check if database is empty and return guidance message if needed
@@ -525,6 +535,7 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
     objectType?: string;
     memberType: 'procedures' | 'fields' | 'controls' | 'dataitems';
     pattern?: string;
+    group?: string;
     limit?: number;
     offset?: number;
     includeDetails?: boolean;
@@ -552,6 +563,7 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
         return this.searchControls({
           objectName: args.objectName,
           controlPattern: args.pattern,
+          group: args.group,
           limit: args.limit,
           offset: args.offset,
           includeDetails: args.includeDetails,
@@ -721,16 +733,55 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
   }
 
   /**
-   * Search controls within a specific page
+   * Recursively collect controls from a nested control tree, tracking the path to each control.
    */
-  async searchControls(args: SearchControlsArgs): Promise<SearchControlsResult> {
+  private flattenControlsWithPath(controls: any[], path: string[], results: { control: any; path: string[] }[]): void {
+    for (const control of controls) {
+      const name = control.Name || '';
+      const currentPath = [...path, name];
+      results.push({ control, path: currentPath });
+      if (control.Controls && control.Controls.length > 0) {
+        this.flattenControlsWithPath(control.Controls, currentPath, results);
+      }
+    }
+  }
+
+  /**
+   * Find a specific group subtree by name in nested controls.
+   */
+  private findGroupSubtree(controls: any[], groupName: string): any[] | null {
+    const lowerGroup = groupName.toLowerCase();
+    for (const control of controls) {
+      if (control.Name && control.Name.toLowerCase() === lowerGroup && control.Controls) {
+        return control.Controls;
+      }
+      if (control.Controls) {
+        const found = this.findGroupSubtree(control.Controls, groupName);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Build a regex from a wildcard pattern, escaping special regex characters first.
+   */
+  private buildWildcardRegex(pattern: string): RegExp {
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(escaped.replace(/\*/g, '.*'));
+  }
+
+  /**
+   * Search controls within a specific page, with recursive nested search and path tracking.
+   */
+  async searchControls(args: SearchControlsArgs & { group?: string }): Promise<SearchControlsResult> {
     const startTime = Date.now();
-    
+
     try {
       const limit = args.limit || 20;
       const offset = args.offset || 0;
       const includeDetails = args.includeDetails !== false;
-      
+
       // Find the page
       const objects = this.database.searchObjects(args.objectName);
       const targetPage = objects.find(obj => obj.Name === args.objectName && (obj.Type === 'Page' || obj.Type === 'PageExtension'));
@@ -739,40 +790,70 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
         throw new Error(`Page or PageExtension not found: ${args.objectName}`);
       }
 
-      // Get all controls for the page
-      let allControls = this.database.getPageControls(targetPage.Name);
-      
+      // Get top-level controls for the page
+      let rootControls = this.database.getPageControls(targetPage.Name);
+
+      // If group filter is specified, narrow to that subtree first
+      if (args.group) {
+        const subtree = this.findGroupSubtree(rootControls, args.group);
+        if (!subtree) {
+          return {
+            objectName: args.objectName,
+            objectType: 'Page',
+            controls: [],
+            totalFound: 0,
+            returned: 0,
+            offset,
+            limit,
+            hasMore: false,
+            executionTimeMs: Date.now() - startTime
+          };
+        }
+        rootControls = subtree;
+      }
+
+      // Flatten the control tree recursively, tracking paths
+      const flatControls: { control: any; path: string[] }[] = [];
+      const basePath = args.group ? [args.group] : [];
+      this.flattenControlsWithPath(rootControls, basePath, flatControls);
+
       // Filter by pattern if provided
+      let filtered = flatControls;
       if (args.controlPattern) {
         const pattern = args.controlPattern.toLowerCase();
         const isWildcard = pattern.includes('*');
-        
+
         if (isWildcard) {
-          const regex = new RegExp(pattern.replace(/\*/g, '.*'));
-          allControls = allControls.filter(control => 
-            control.Name && regex.test(control.Name.toLowerCase())
+          const regex = this.buildWildcardRegex(pattern);
+          filtered = flatControls.filter(entry =>
+            entry.control.Name && regex.test(entry.control.Name.toLowerCase())
           );
         } else {
-          allControls = allControls.filter(control => 
-            control.Name && control.Name.toLowerCase().includes(pattern)
+          filtered = flatControls.filter(entry =>
+            entry.control.Name && entry.control.Name.toLowerCase().includes(pattern)
           );
         }
       }
 
       // Apply pagination
-      const totalFound = allControls.length;
-      const paginatedControls = allControls.slice(offset, offset + limit);
+      const totalFound = filtered.length;
+      const paginated = filtered.slice(offset, offset + limit);
 
-      // Optionally strip details to save tokens
-      const controls = paginatedControls.map(control => {
+      // Build result with path info
+      const controls = paginated.map(entry => {
         if (!includeDetails) {
-          // Return minimal info
           return {
-            Name: control.Name,
-            Type: control.Type || control.ControlType
+            Name: entry.control.Name,
+            Kind: entry.control.Kind,
+            Path: entry.path,
           };
         }
-        return control;
+        return {
+          ...entry.control,
+          Path: entry.path,
+          // Strip nested Controls from results to reduce token usage
+          Controls: undefined,
+        };
       });
 
       const executionTime = Date.now() - startTime;
@@ -1009,5 +1090,228 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
     } catch (error) {
       throw new Error(`Get object summary failed: ${error}`);
     }
+  }
+
+  /**
+   * Resolve a ReferenceSourceFileName to an actual file path on disk.
+   */
+  private resolveSourceFile(refPath: string): string | null {
+    if (!refPath || this.sourcePaths.length === 0) return null;
+    const decoded = decodeURIComponent(refPath);
+    for (const srcRoot of this.sourcePaths) {
+      const fullPath = path.join(srcRoot, decoded);
+      if (fs.existsSync(fullPath)) {
+        return fullPath;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Extract a procedure or trigger body from AL source by name.
+   * Finds the declaration line and extracts until the matching end block.
+   */
+  private extractProcedureFromSource(lines: string[], memberName: string): { snippet: string; startLine: number; endLine: number } | null {
+    const lowerName = memberName.toLowerCase();
+    let startIdx = -1;
+
+    // Find the procedure/trigger declaration
+    for (let i = 0; i < lines.length; i++) {
+      const lower = lines[i].toLowerCase().trim();
+      if (
+        (lower.includes('procedure') && lower.includes(lowerName)) ||
+        (lower.startsWith('trigger') && lower.includes(lowerName))
+      ) {
+        // Check for attributes on preceding lines
+        startIdx = i;
+        while (startIdx > 0 && lines[startIdx - 1].trim().startsWith('[')) {
+          startIdx--;
+        }
+        break;
+      }
+    }
+
+    if (startIdx === -1) return null;
+
+    // Find the end of the procedure by tracking begin/end depth
+    let depth = 0;
+    let foundBegin = false;
+    let endIdx = startIdx;
+
+    for (let i = startIdx; i < lines.length; i++) {
+      const trimmed = lines[i].trim().toLowerCase();
+
+      // Count begin/end blocks (simplified — handles most AL patterns)
+      const beginMatches = trimmed.match(/\bbegin\b/g);
+      const endMatches = trimmed.match(/\bend\b/g);
+
+      if (beginMatches) {
+        depth += beginMatches.length;
+        foundBegin = true;
+      }
+      if (endMatches) {
+        depth -= endMatches.length;
+      }
+
+      if (foundBegin && depth <= 0) {
+        endIdx = i;
+        break;
+      }
+
+      // Safety: if we hit another procedure declaration, stop
+      if (i > startIdx + 2 && !foundBegin) {
+        const nextTrimmed = lines[i].trim().toLowerCase();
+        if (nextTrimmed.startsWith('procedure ') || nextTrimmed.startsWith('local procedure ') ||
+            nextTrimmed.startsWith('internal procedure ') || nextTrimmed.startsWith('trigger ')) {
+          endIdx = i - 1;
+          break;
+        }
+      }
+    }
+
+    return {
+      snippet: lines.slice(startIdx, endIdx + 1).join('\n'),
+      startLine: startIdx + 1,
+      endLine: endIdx + 1,
+    };
+  }
+
+  /**
+   * Extract a field declaration from AL source by name.
+   */
+  private extractFieldFromSource(lines: string[], memberName: string): { snippet: string; startLine: number; endLine: number } | null {
+    const lowerName = memberName.toLowerCase();
+    let startIdx = -1;
+
+    for (let i = 0; i < lines.length; i++) {
+      const lower = lines[i].toLowerCase();
+      // Match field(ID; "Name"; Type) or field(ID; Name; Type)
+      if (lower.includes('field(') && lower.includes(lowerName)) {
+        startIdx = i;
+        break;
+      }
+    }
+
+    if (startIdx === -1) return null;
+
+    // Find the closing brace of the field block
+    let depth = 0;
+    let endIdx = startIdx;
+
+    for (let i = startIdx; i < lines.length; i++) {
+      for (const ch of lines[i]) {
+        if (ch === '{') depth++;
+        if (ch === '}') depth--;
+      }
+      if (depth <= 0 && i > startIdx) {
+        endIdx = i;
+        break;
+      }
+    }
+
+    return {
+      snippet: lines.slice(startIdx, endIdx + 1).join('\n'),
+      startLine: startIdx + 1,
+      endLine: endIdx + 1,
+    };
+  }
+
+  /**
+   * Get a source code snippet for an AL object or a specific member within it.
+   */
+  async getSourceSnippet(args: {
+    objectName: string;
+    objectType?: string;
+    memberName?: string;
+    memberType?: 'procedure' | 'trigger' | 'field' | 'control';
+  }): Promise<{
+    objectName: string;
+    filePath: string;
+    snippet: string;
+    startLine: number;
+    endLine: number;
+    totalLines: number;
+    executionTimeMs: number;
+  }> {
+    const startTime = Date.now();
+
+    if (this.sourcePaths.length === 0) {
+      throw new Error('Source lookup not available. Set AL_SOURCE_PATH environment variable to a folder containing BC base app .al source files.');
+    }
+
+    // Find the object in the symbol database
+    const objects = this.database.searchObjects(args.objectName, args.objectType);
+    const target = objects.find(obj => obj.Name === args.objectName);
+
+    if (!target) {
+      throw new Error(`Object not found: ${args.objectName}`);
+    }
+
+    if (!target.ReferenceSourceFileName) {
+      throw new Error(`No source file reference for: ${args.objectName}`);
+    }
+
+    // Resolve to an actual file
+    const filePath = this.resolveSourceFile(target.ReferenceSourceFileName);
+
+    if (!filePath) {
+      throw new Error(`Source file not found: ${target.ReferenceSourceFileName} (searched in: ${this.sourcePaths.join(', ')})`);
+    }
+
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const lines = content.split('\n');
+
+    // If no member requested, return a summary (first 50 lines + last 5)
+    if (!args.memberName) {
+      const maxLines = 50;
+      let snippet: string;
+      let startLine = 1;
+      let endLine: number;
+
+      if (lines.length <= maxLines) {
+        snippet = content;
+        endLine = lines.length;
+      } else {
+        snippet = lines.slice(0, maxLines).join('\n') + `\n\n// ... ${lines.length - maxLines} more lines ...`;
+        endLine = maxLines;
+      }
+
+      return {
+        objectName: args.objectName,
+        filePath: target.ReferenceSourceFileName,
+        snippet,
+        startLine,
+        endLine,
+        totalLines: lines.length,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
+
+    // Extract specific member
+    const mType = args.memberType || 'procedure';
+    let result: { snippet: string; startLine: number; endLine: number } | null = null;
+
+    if (mType === 'procedure' || mType === 'trigger') {
+      result = this.extractProcedureFromSource(lines, args.memberName);
+    } else if (mType === 'field') {
+      result = this.extractFieldFromSource(lines, args.memberName);
+    } else if (mType === 'control') {
+      // Controls use the same brace-counting approach as fields
+      result = this.extractFieldFromSource(lines, args.memberName);
+    }
+
+    if (!result) {
+      throw new Error(`Member "${args.memberName}" not found in ${target.ReferenceSourceFileName}`);
+    }
+
+    return {
+      objectName: args.objectName,
+      filePath: target.ReferenceSourceFileName,
+      snippet: result.snippet,
+      startLine: result.startLine,
+      endLine: result.endLine,
+      totalLines: lines.length,
+      executionTimeMs: Date.now() - startTime,
+    };
   }
 }
