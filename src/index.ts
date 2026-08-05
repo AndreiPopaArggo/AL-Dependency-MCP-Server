@@ -22,6 +22,7 @@ export class ALMCPServer {
   private tools: ALMCPTools;
   private isInitialized: boolean = false;
   private initializationPromise: Promise<void> | null = null;
+  private toolCallCount: number = 0;
 
   constructor() {
     this.server = new Server(
@@ -289,102 +290,140 @@ export class ALMCPServer {
     // Handle tool calls
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
+      const callId = ++this.toolCallCount;
+      const argsJson = JSON.stringify(args ?? {});
+      console.error(
+        `[tool] #${callId} start ${name} args=${argsJson.length > 150 ? argsJson.slice(0, 150) + '…' : argsJson}`
+      );
+      const startedAt = Date.now();
 
       try {
         // Ensure AL packages are loaded before processing any tool call
         await this.ensureInitialized();
 
-        switch (name) {
-          case 'al_search_objects':
-            // Handle domain filtering within search
-            if (args && (args as any).domain) {
-              const domainResult = await this.tools.searchByDomain(
-                (args as any).domain,
-                (args as any).objectType ? [(args as any).objectType] : undefined
-              );
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: JSON.stringify(domainResult, null, 2),
-                  },
-                ],
-              };
-            }
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(await this.tools.searchObjects(args as any), null, 2),
-                },
-              ],
-            };
-
-          case 'al_get_object_definition':
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(await this.tools.getObjectDefinition(args as any), null, 2),
-                },
-              ],
-            };
-
-          case 'al_find_references':
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(await this.tools.findReferences(args as any), null, 2),
-                },
-              ],
-            };
-
-          case 'al_search_object_members':
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(await this.tools.searchObjectMembers(args as any), null, 2),
-                },
-              ],
-            };
-
-          case 'al_get_object_summary':
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(await this.tools.getObjectSummary((args as any).objectName, (args as any).objectType), null, 2),
-                },
-              ],
-            };
-
-          case 'al_get_source':
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(await this.tools.getSourceSnippet(args as any), null, 2),
-                },
-              ],
-            };
-
-          default:
-            throw new Error(`Unknown tool: ${name}`);
-        }
+        const result = await this.dispatchTool(name, args);
+        console.error(
+          `[tool] #${callId} done ${name} ok ${Date.now() - startedAt}ms result=${this.summarizeResult(result)}`
+        );
+        return result;
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const logMessage = message.replace(/\s+/g, ' ');
+        console.error(
+          `[tool] #${callId} done ${name} error ${Date.now() - startedAt}ms "${logMessage.length > 200 ? logMessage.slice(0, 200) + '…' : logMessage}"`
+        );
         return {
           content: [
             {
               type: 'text',
-              text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+              text: `Error: ${message}`,
             },
           ],
           isError: true,
         };
       }
     });
+  }
+
+  private async dispatchTool(name: string, args: unknown): Promise<{ content: { type: string; text: string }[] }> {
+    switch (name) {
+      case 'al_search_objects':
+        // Handle domain filtering within search
+        if (args && (args as any).domain) {
+          const domainResult = await this.tools.searchByDomain(
+            (args as any).domain,
+            (args as any).objectType ? [(args as any).objectType] : undefined
+          );
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(domainResult, null, 2),
+              },
+            ],
+          };
+        }
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(await this.tools.searchObjects(args as any), null, 2),
+            },
+          ],
+        };
+
+      case 'al_get_object_definition':
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(await this.tools.getObjectDefinition(args as any), null, 2),
+            },
+          ],
+        };
+
+      case 'al_find_references':
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(await this.tools.findReferences(args as any), null, 2),
+            },
+          ],
+        };
+
+      case 'al_search_object_members':
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(await this.tools.searchObjectMembers(args as any), null, 2),
+            },
+          ],
+        };
+
+      case 'al_get_object_summary':
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(await this.tools.getObjectSummary((args as any).objectName, (args as any).objectType), null, 2),
+            },
+          ],
+        };
+
+      case 'al_get_source':
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(await this.tools.getSourceSnippet(args as any), null, 2),
+            },
+          ],
+        };
+
+      default:
+        throw new Error(`Unknown tool: ${name}`);
+    }
+  }
+
+  private summarizeResult(result: { content: { type: string; text: string }[] }): string {
+    const bytes = result.content.reduce((sum, item) => sum + item.text.length, 0);
+    let items: number | null = null;
+    try {
+      const parsed = JSON.parse(result.content[0]?.text ?? '');
+      if (Array.isArray(parsed)) {
+        items = parsed.length;
+      } else if (parsed && typeof parsed === 'object') {
+        const list = [parsed.results, parsed.objects, parsed.members, parsed.references, parsed.matches].find(
+          Array.isArray
+        );
+        if (list) items = list.length;
+      }
+    } catch {
+      // non-JSON result — report bytes only
+    }
+    return items !== null ? `${items} items, ${bytes} bytes` : `${bytes} bytes`;
   }
 
   private reportProgress(progress: ParseProgress): void {
