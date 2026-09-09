@@ -53,11 +53,14 @@ export class OptimizedSymbolDatabase implements ALSymbolDatabase {
   /**
    * Add an object to the database with full indexing
    */
-  addObject(object: ALObject, packageName: string): void {
+  addObject(object: ALObject, packageName: string, packageAppId?: string): void {
     const key = `${object.Type}:${object.Id}`;
-    
+
     // Store the package name on the object
     object.PackageName = packageName;
+    if (packageAppId) {
+      object.PackageAppId = packageAppId.replace(/-/g, '').toLowerCase();
+    }
     
     // Primary indices
     this.objectsById.set(key, object);
@@ -255,9 +258,32 @@ export class OptimizedSymbolDatabase implements ALSymbolDatabase {
    */
   getExtensionsOf(object: ALObject): ALObject[] {
     const wanted = `${object.Type}Extension`;
-    return (this.extensionsByBase.get(object.Name) || [])
-      .filter(ext => ext.Type === wanted)
+    const found = new Map<string, ALObject>();
+
+    // A moved object is declared by more than one package; an extension may target
+    // any of those declarations, so collect across all of them. Plus the name-only
+    // bucket, for extensions whose target app id could not be determined.
+    const buckets: string[] = [this.extensionKey(object.Name, undefined)];
+    for (const decl of this.getDeclarations(object)) {
+      if (decl.PackageAppId) {
+        buckets.push(this.extensionKey(object.Name, decl.PackageAppId));
+      }
+    }
+
+    for (const bucket of buckets) {
+      for (const ext of this.extensionsByBase.get(bucket) || []) {
+        if (ext.Type === wanted) {
+          found.set(`${ext.Type}:${ext.Id}:${ext.PackageName}`, ext);
+        }
+      }
+    }
+    return Array.from(found.values())
       .sort((a, b) => (a.PackageName || '').localeCompare(b.PackageName || ''));
+  }
+
+  /** Bucket key for the extension index. */
+  private extensionKey(targetName: string, targetAppId?: string): string {
+    return `${targetAppId || '*'}:${targetName.toLowerCase()}`;
   }
 
   /**
@@ -432,7 +458,14 @@ export class OptimizedSymbolDatabase implements ALSymbolDatabase {
    * Get objects that extend a base object
    */
   getExtensions(baseObjectName: string): ALObject[] {
-    return this.extensionsByBase.get(baseObjectName) || [];
+    const found: ALObject[] = [];
+    const suffix = `:${baseObjectName.toLowerCase()}`;
+    for (const [key, exts] of this.extensionsByBase) {
+      if (key.endsWith(suffix)) {
+        found.push(...exts);
+      }
+    }
+    return found;
   }
 
   /**
@@ -570,11 +603,17 @@ export class OptimizedSymbolDatabase implements ALSymbolDatabase {
         break;
     }
 
-    // Check for extension relationships
+    // Check for extension relationships. Key on the target's app id where the
+    // TargetObject carried one, so an extension binds to the object it actually
+    // extends rather than to every object sharing that name; fall back to the bare
+    // name otherwise.
     const extendsProperty = object.Properties?.find(p => p.Name === 'Extends');
     if (extendsProperty) {
       const baseObjectName = extendsProperty.Value;
-      this.addToMapArray(this.extensionsByBase, baseObjectName, object);
+      const targetAppId = object.TargetAppId
+        || (object.TargetInSamePackage ? object.PackageAppId : undefined);
+      this.addToMapArray(
+        this.extensionsByBase, this.extensionKey(baseObjectName, targetAppId), object);
     }
   }
 

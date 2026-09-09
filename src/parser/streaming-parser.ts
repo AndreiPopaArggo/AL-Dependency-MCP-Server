@@ -588,13 +588,40 @@ export class StreamingSymbolParser {
   }
 
   /**
+   * App Id embedded in a TargetObject string ("#<appid>#ObjectName"), normalised to
+   * lowercase without dashes so it compares against a manifest App Id. Undefined
+   * when the string carries no app id.
+   */
+  private extractTargetAppId(targetObject: string): string | undefined {
+    const parts = targetObject.split('#').filter(p => p.length > 0);
+    if (parts.length < 2) {
+      return undefined;
+    }
+    const id = parts[0].replace(/-/g, '').toLowerCase();
+    return /^[0-9a-f]{32}$/.test(id) ? id : undefined;
+  }
+
+  /**
+   * Record what an extension extends: the target name as an "Extends" property
+   * (what the reference and extension indices read) plus the target app id.
+   */
+  private applyTargetObject(targetObject: string, baseObject: ALObject): void {
+    baseObject.Properties = baseObject.Properties || [];
+    baseObject.Properties.push({
+      Name: 'Extends',
+      Value: this.extractTargetObjectName(targetObject)
+    });
+    baseObject.TargetAppId = this.extractTargetAppId(targetObject);
+    // A TargetObject without an app id means the target is in this same package.
+    baseObject.TargetInSamePackage = baseObject.TargetAppId === undefined;
+  }
+
+  /**
    * Parse table extension-specific data
    */
   private parseTableExtension(data: any, baseObject: ALObject): ALObject {
     if (data.TargetObject) {
-      const targetName = this.extractTargetObjectName(data.TargetObject);
-      baseObject.Properties = baseObject.Properties || [];
-      baseObject.Properties.push({ Name: 'Extends', Value: targetName });
+      this.applyTargetObject(data.TargetObject, baseObject);
     }
 
     if (data.Fields) {
@@ -626,9 +653,7 @@ export class StreamingSymbolParser {
    */
   private parsePageExtension(data: any, baseObject: ALObject): ALObject {
     if (data.TargetObject) {
-      const targetName = this.extractTargetObjectName(data.TargetObject);
-      baseObject.Properties = baseObject.Properties || [];
-      baseObject.Properties.push({ Name: 'Extends', Value: targetName });
+      this.applyTargetObject(data.TargetObject, baseObject);
     }
 
     if (data.ControlChanges) {
@@ -656,9 +681,7 @@ export class StreamingSymbolParser {
    */
   private parseEnumExtension(data: any, baseObject: ALObject): ALObject {
     if (data.TargetObject) {
-      const targetName = this.extractTargetObjectName(data.TargetObject);
-      baseObject.Properties = baseObject.Properties || [];
-      baseObject.Properties.push({ Name: 'Extends', Value: targetName });
+      this.applyTargetObject(data.TargetObject, baseObject);
     }
 
     if (data.Values) {
@@ -681,9 +704,7 @@ export class StreamingSymbolParser {
       baseObject.Properties = baseObject.Properties || [];
       baseObject.Properties.push({ Name: 'Extends', Value: data.Target });
     } else if (data.TargetObject) {
-      const targetName = this.extractTargetObjectName(data.TargetObject);
-      baseObject.Properties = baseObject.Properties || [];
-      baseObject.Properties.push({ Name: 'Extends', Value: targetName });
+      this.applyTargetObject(data.TargetObject, baseObject);
     }
 
     if (data.DataItems) {
@@ -713,9 +734,7 @@ export class StreamingSymbolParser {
    */
   private parsePermissionSetExtension(data: any, baseObject: ALObject): ALObject {
     if (data.TargetObject) {
-      const targetName = this.extractTargetObjectName(data.TargetObject);
-      baseObject.Properties = baseObject.Properties || [];
-      baseObject.Properties.push({ Name: 'Extends', Value: targetName });
+      this.applyTargetObject(data.TargetObject, baseObject);
     }
 
     return baseObject;

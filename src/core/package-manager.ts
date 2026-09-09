@@ -162,7 +162,7 @@ export class ALPackageManager {
 
     // Add objects to database
     for (const obj of objects) {
-      this.database.addObject(obj, manifest.name);
+      this.database.addObject(obj, manifest.name, manifest.id);
     }
 
     // Create package info
@@ -204,7 +204,7 @@ export class ALPackageManager {
 
       // Add objects to database
       for (const obj of objects) {
-        this.database.addObject(obj, manifest.name);
+        this.database.addObject(obj, manifest.name, manifest.id);
       }
 
       // Create package info

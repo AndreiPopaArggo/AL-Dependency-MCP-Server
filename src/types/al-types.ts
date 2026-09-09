@@ -24,6 +24,17 @@ export interface ALObject {
   Properties?: ALProperty[];
   ReferenceSourceFileName?: string;
   PackageName?: string;
+  /** App Id of the package declaring this object, normalised (lowercase, no
+   *  dashes). From NavxManifest.xml. */
+  PackageAppId?: string;
+  /** For an extension: App Id of the app owning the object it extends, taken from
+   *  TargetObject ("#<appid>#Name"). Undefined when the target carries no app id. */
+  TargetAppId?: string;
+  /** For an extension declared with a TargetObject that omits the app id: BC does
+   *  that only when the target lives in the same package, so the declaring
+   *  package's app id is the target's. Not set for ReportExtension's bare Target,
+   *  which carries no app id in any case and can cross packages. */
+  TargetInSamePackage?: boolean;
 }
 
 export interface ALTable extends ALObject {
