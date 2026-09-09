@@ -75,8 +75,15 @@ export interface ALField {
   TypeDefinition: ALTypeDefinition;
   Properties: ALProperty[];
   /** Package that declares this member. Set when an object's members are drawn
-   *  from more than one package (a table moved between apps). */
+   *  from more than one package (a table moved between apps), or in the merged
+   *  base+extensions view. */
   SourcePackageName?: string;
+  /** Object that declares this member - an extension carries its own name, which
+   *  need not match the object it extends (e.g. "E-Doc. Sales Header"). Set only
+   *  in the merged view. */
+  SourceObjectName?: string;
+  /** Type of the declaring object: Table/Page/... or TableExtension/PageExtension. */
+  SourceObjectType?: string;
 }
 
 export interface ALKey {
@@ -127,6 +134,10 @@ export interface ALProcedure {
   Name: string;
   /** Package that declares this member. See ALField.SourcePackageName. */
   SourcePackageName?: string;
+  /** Declaring object; see ALField.SourceObjectName. */
+  SourceObjectName?: string;
+  /** Declaring object type; see ALField.SourceObjectType. */
+  SourceObjectType?: string;
   MethodKind?: number;
   IsLocal?: boolean;
   IsInternal?: boolean;

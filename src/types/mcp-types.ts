@@ -55,6 +55,7 @@ export interface SearchProceduresArgs extends MCPToolArgs {
   objectName: string;
   objectType?: string;
   packageName?: string;
+  includeExtensions?: boolean;
   procedurePattern?: string;
   limit?: number;
   offset?: number;
@@ -65,6 +66,7 @@ export interface SearchFieldsArgs extends MCPToolArgs {
   objectName: string;
   objectType?: string;
   packageName?: string;
+  includeExtensions?: boolean;
   fieldPattern?: string;
   limit?: number;
   offset?: number;

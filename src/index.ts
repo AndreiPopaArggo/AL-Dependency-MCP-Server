@@ -221,6 +221,11 @@ export class ALMCPServer {
                   type: 'string',
                   description: 'Disambiguate when several packages ship an object of this name (e.g. "Base Application"). By default the base object wins over an extension of the same name.',
                 },
+                includeExtensions: {
+                  type: 'boolean',
+                  description: 'Merged view (procedures and fields): also return the members added by every extension of this object, each tagged with SourcePackageName and SourceObjectName. Answers "what can I call on this record" rather than "what does the base object declare". Off by default.',
+                  default: false,
+                },
                 limit: {
                   type: 'number',
                   description: 'Max results (default: 20)',

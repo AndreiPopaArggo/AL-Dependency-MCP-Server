@@ -549,6 +549,7 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
     pattern?: string;
     group?: string;
     packageName?: string;
+    includeExtensions?: boolean;
     limit?: number;
     offset?: number;
     includeDetails?: boolean;
@@ -560,6 +561,7 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
           objectName: args.objectName,
           objectType: args.objectType,
           packageName: args.packageName,
+          includeExtensions: args.includeExtensions,
           procedurePattern: args.pattern,
           limit: args.limit,
           offset: args.offset,
@@ -570,6 +572,7 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
           objectName: args.objectName,
           objectType: args.objectType,
           packageName: args.packageName,
+          includeExtensions: args.includeExtensions,
           fieldPattern: args.pattern,
           limit: args.limit,
           offset: args.offset,
@@ -615,8 +618,10 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
         throw new Error(`Object not found: ${args.objectName}`);
       }
 
-      // Get all procedures for the object
-      let allProcedures = this.database.getObjectProceduresFor(targetObject);
+      // Get all procedures for the object, optionally including its extensions'
+      let allProcedures = args.includeExtensions
+        ? this.database.getMergedMembers<any>(targetObject, 'procedures')
+        : this.database.getObjectProceduresFor(targetObject);
       
       // Filter by pattern if provided
       if (args.procedurePattern) {
@@ -643,16 +648,27 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
       const procedures = paginatedProcedures.map(proc => {
         if (!includeDetails) {
           // Return minimal info, but never drop provenance
-          return proc.SourcePackageName
-            ? { Name: proc.Name, SourcePackageName: proc.SourcePackageName }
-            : { Name: proc.Name };
+          const minimal: any = { Name: proc.Name };
+          if (proc.SourcePackageName) {
+            minimal.SourcePackageName = proc.SourcePackageName;
+          }
+          if (proc.SourceObjectName) {
+            minimal.SourceObjectName = proc.SourceObjectName;
+          }
+          if (proc.SourceObjectType) {
+            minimal.SourceObjectType = proc.SourceObjectType;
+          }
+          return minimal;
         }
         return proc;
       });
 
       const executionTime = Date.now() - startTime;
 
-      const contributingPackages = this.database.getContributingPackages(targetObject);
+      const contributingPackages = args.includeExtensions
+        ? Array.from(new Set(allProcedures
+            .map((p: any) => p.SourcePackageName).filter(Boolean))) as string[]
+        : this.database.getContributingPackages(targetObject);
 
       return {
         objectName: args.objectName,
@@ -700,8 +716,10 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
         throw new Error(`Table or TableExtension not found: ${args.objectName}`);
       }
 
-      // Get all fields for the table
-      let allFields = this.database.getObjectFields(targetTable);
+      // Get all fields for the table, optionally including its extensions'
+      let allFields = args.includeExtensions
+        ? this.database.getMergedMembers<any>(targetTable, 'fields')
+        : this.database.getObjectFields(targetTable);
       
       // Filter by pattern if provided
       if (args.fieldPattern) {
@@ -736,6 +754,12 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
           if (field.SourcePackageName) {
             minimal.SourcePackageName = field.SourcePackageName;
           }
+          if (field.SourceObjectName) {
+            minimal.SourceObjectName = field.SourceObjectName;
+          }
+          if (field.SourceObjectType) {
+            minimal.SourceObjectType = field.SourceObjectType;
+          }
           return minimal;
         }
         return field;
@@ -743,7 +767,10 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
 
       const executionTime = Date.now() - startTime;
 
-      const contributingPackages = this.database.getContributingPackages(targetTable);
+      const contributingPackages = args.includeExtensions
+        ? Array.from(new Set(allFields
+            .map((f: any) => f.SourcePackageName).filter(Boolean))) as string[]
+        : this.database.getContributingPackages(targetTable);
 
       return {
         objectName: args.objectName,

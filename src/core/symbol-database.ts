@@ -245,6 +245,77 @@ export class OptimizedSymbolDatabase implements ALSymbolDatabase {
   }
 
   /**
+   * Extensions targeting this object. The parser turns an extension's TargetObject
+   * ("#<appid>#Sales Header") into an "Extends" property holding the target name,
+   * and that name is what this index is keyed on.
+   *
+   * Name-keyed, so where two distinct objects share a name (Base Application's
+   * "Dimension Set Entry" table 480 and the Power BI package's 36950) an extension
+   * of either is reported for both. The target app id is dropped by the parser.
+   */
+  getExtensionsOf(object: ALObject): ALObject[] {
+    const wanted = `${object.Type}Extension`;
+    return (this.extensionsByBase.get(object.Name) || [])
+      .filter(ext => ext.Type === wanted)
+      .sort((a, b) => (a.PackageName || '').localeCompare(b.PackageName || ''));
+  }
+
+  /**
+   * Members of the object AND of every extension of it, each stamped with the
+   * package and object that declares it. Base members come first; extension
+   * members are never de-duplicated against the base, because they are declared on
+   * a different object and an extension may legitimately repeat a name.
+   */
+  getMergedMembers<T extends { Id?: number; Name?: string }>(
+    object: ALObject, kind: 'fields' | 'procedures'): T[] {
+    const index: Map<string, any[]> =
+      kind === 'fields' ? this.fieldsByTable : this.proceduresByObject;
+    const stamp = (member: any, decl: ALObject) => ({
+      ...member,
+      SourcePackageName: member.SourcePackageName || decl.PackageName,
+      SourceObjectName: decl.Name,
+      SourceObjectType: decl.Type,
+    });
+
+    // A field moved out of an app is often carried BOTH by that app's retained
+    // table declaration and by the TableExtension it now uses to contribute it, so
+    // the same member can arrive twice. Field ids are unique across the effective
+    // table (AL0206); procedures are matched on the AL signature, since symbol ids
+    // differ per declaration and overloads differ only by parameters.
+    const identity = (member: any): string => {
+      if (kind === 'fields') {
+        return member.Id !== undefined ? `id:${member.Id}` : `name:${member.Name}`;
+      }
+      const params = (member.Parameters || [])
+        .map((p: any) => (p.TypeDefinition && p.TypeDefinition.Name) || '?')
+        .join(',');
+      return `sig:${member.Name}(${params})`;
+    };
+
+    const seen = new Set<string>();
+    const merged: any[] = [];
+    const take = (members: any[], decl: ALObject) => {
+      for (const member of members) {
+        const key = identity(member);
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        merged.push(stamp(member, decl));
+      }
+    };
+
+    take((kind === 'fields'
+      ? this.getObjectFields(object)
+      : this.getObjectProceduresFor(object)) as any[], object);
+
+    for (const ext of this.getExtensionsOf(object)) {
+      take(index.get(this.memberKey(ext)) || [], ext);
+    }
+    return merged as T[];
+  }
+
+  /**
    * Packages contributing members to this object, richest declaration first.
    * More than one entry means the object is split across packages by a move.
    */
