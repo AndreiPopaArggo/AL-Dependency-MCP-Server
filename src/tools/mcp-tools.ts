@@ -568,6 +568,7 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
       case 'fields':
         return this.searchFields({
           objectName: args.objectName,
+          objectType: args.objectType,
           packageName: args.packageName,
           fieldPattern: args.pattern,
           limit: args.limit,
@@ -684,9 +685,12 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
       const offset = args.offset || 0;
       const includeDetails = args.includeDetails !== false;
       
-      // Find the table. Prefer the base table over a same-named table extension.
+      // Find the table. An explicit objectType wins; otherwise prefer the base
+      // table over a same-named table extension.
       const targetTable = this.database.resolveObjectByName(
-        args.objectName, ['Table', 'TableExtension'], args.packageName);
+        args.objectName,
+        args.objectType ? [args.objectType] : ['Table', 'TableExtension'],
+        args.packageName);
 
       if (!targetTable) {
         throw new Error(`Table or TableExtension not found: ${args.objectName}`);

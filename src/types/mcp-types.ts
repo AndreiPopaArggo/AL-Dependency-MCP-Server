@@ -63,6 +63,7 @@ export interface SearchProceduresArgs extends MCPToolArgs {
 
 export interface SearchFieldsArgs extends MCPToolArgs {
   objectName: string;
+  objectType?: string;
   packageName?: string;
   fieldPattern?: string;
   limit?: number;
