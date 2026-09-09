@@ -217,6 +217,10 @@ export class ALMCPServer {
                   type: 'string',
                   description: 'For controls only: restrict search to a specific group/tab by name (e.g. "Item" to search only the Item fast tab)',
                 },
+                packageName: {
+                  type: 'string',
+                  description: 'Disambiguate when several packages ship an object of this name (e.g. "Base Application"). By default the base object wins over an extension of the same name.',
+                },
                 limit: {
                   type: 'number',
                   description: 'Max results (default: 20)',

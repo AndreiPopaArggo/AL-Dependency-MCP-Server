@@ -22,8 +22,16 @@ export class OptimizedSymbolDatabase implements ALSymbolDatabase {
   private allObjects: ALObject[] = [];
 
   // Secondary indices for complex queries
+  // Keyed by memberKey() (type + lowercased name + package), never by bare name.
   private fieldsByTable = new Map<string, ALField[]>();
   private proceduresByObject = new Map<string, ALProcedure[]>();
+
+  // Base objects win over extensions when resolving a bare name.
+  private static readonly TABLE_TYPE_PREFERENCE = ['Table', 'TableExtension'];
+  private static readonly OBJECT_TYPE_PREFERENCE = [
+    'Table', 'Page', 'Codeunit', 'Report', 'Query', 'XmlPort',
+    'TableExtension', 'PageExtension', 'ReportExtension',
+  ];
   private extensionsByBase = new Map<string, ALObject[]>();
 
   // Field reference indices
@@ -144,17 +152,64 @@ export class OptimizedSymbolDatabase implements ALSymbolDatabase {
   }
 
   /**
-   * Get fields for a specific table
+   * Member-index key. Object name alone is NOT unique: an extension can carry the
+   * same name as the object it extends (e.g. Subscription Billing's "Sales Header"
+   * TableExtension vs Base Application's "Sales Header" Table), and two packages can
+   * ship same-named codeunits. Keying on name alone made the last package loaded
+   * overwrite the earlier one's fields and procedures.
    */
-  getTableFields(tableName: string): ALField[] {
-    return this.fieldsByTable.get(tableName) || [];
+  private memberKey(object: ALObject): string {
+    return `${object.Type}:${object.Name.toLowerCase()}:${object.PackageName || ''}`;
   }
 
   /**
-   * Get procedures for a specific object
+   * Resolve a bare name to a single object, preferring base types over extensions
+   * so that "Sales Header" means the table, not a table extension of it.
+   */
+  resolveObjectByName(name: string, preferTypes: string[], packageName?: string): ALObject | undefined {
+    let candidates = this.getObjectsByName(name).filter(obj => obj.Name === name);
+    if (packageName) {
+      candidates = candidates.filter(obj => obj.PackageName === packageName);
+    }
+    for (const type of preferTypes) {
+      const hit = candidates.find(obj => obj.Type === type);
+      if (hit) {
+        return hit;
+      }
+    }
+    return candidates[0];
+  }
+
+  /**
+   * Get fields for an already-resolved object (collision-proof).
+   */
+  getObjectFields(object: ALObject): ALField[] {
+    return this.fieldsByTable.get(this.memberKey(object)) || [];
+  }
+
+  /**
+   * Get procedures for an already-resolved object (collision-proof).
+   */
+  getObjectProceduresFor(object: ALObject): ALProcedure[] {
+    return this.proceduresByObject.get(this.memberKey(object)) || [];
+  }
+
+  /**
+   * Get fields for a specific table by name. Prefers the base table over any
+   * extension of the same name.
+   */
+  getTableFields(tableName: string): ALField[] {
+    const object = this.resolveObjectByName(tableName, OptimizedSymbolDatabase.TABLE_TYPE_PREFERENCE);
+    return object ? this.getObjectFields(object) : [];
+  }
+
+  /**
+   * Get procedures for a specific object by name. Prefers base objects over
+   * extensions of the same name.
    */
   getObjectProcedures(objectName: string): ALProcedure[] {
-    return this.proceduresByObject.get(objectName) || [];
+    const object = this.resolveObjectByName(objectName, OptimizedSymbolDatabase.OBJECT_TYPE_PREFERENCE);
+    return object ? this.getObjectProceduresFor(object) : [];
   }
 
   /**
@@ -325,15 +380,17 @@ export class OptimizedSymbolDatabase implements ALSymbolDatabase {
    * Index type-specific data for fast lookups
    */
   private indexTypeSpecificData(object: ALObject): void {
+    const key = this.memberKey(object);
+
     switch (object.Type) {
       case 'Table':
         const table = object as ALTable;
         if (table.Fields) {
-          this.fieldsByTable.set(object.Name, table.Fields);
+          this.fieldsByTable.set(key, table.Fields);
         }
         // Tables can also have procedures (triggers like OnInsert, OnModify, etc.)
         if ('Procedures' in object && (object as any).Procedures) {
-          this.proceduresByObject.set(object.Name, (object as any).Procedures);
+          this.proceduresByObject.set(key, (object as any).Procedures);
         }
         break;
 
@@ -341,24 +398,24 @@ export class OptimizedSymbolDatabase implements ALSymbolDatabase {
       case 'Codeunit':
       case 'Report':
         if ('Procedures' in object && (object as any).Procedures) {
-          this.proceduresByObject.set(object.Name, (object as any).Procedures);
+          this.proceduresByObject.set(key, (object as any).Procedures);
         }
         break;
 
       case 'TableExtension':
         // Index extension fields - same pattern as Table
         if ((object as any).Fields) {
-          this.fieldsByTable.set(object.Name, (object as any).Fields);
+          this.fieldsByTable.set(key, (object as any).Fields);
         }
         if ('Procedures' in object && (object as any).Procedures) {
-          this.proceduresByObject.set(object.Name, (object as any).Procedures);
+          this.proceduresByObject.set(key, (object as any).Procedures);
         }
         break;
 
       case 'PageExtension':
       case 'ReportExtension':
         if ('Procedures' in object && (object as any).Procedures) {
-          this.proceduresByObject.set(object.Name, (object as any).Procedures);
+          this.proceduresByObject.set(key, (object as any).Procedures);
         }
         break;
     }

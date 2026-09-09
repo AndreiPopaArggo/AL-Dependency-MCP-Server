@@ -54,6 +54,7 @@ export interface ResolveSymbolArgs extends MCPToolArgs {
 export interface SearchProceduresArgs extends MCPToolArgs {
   objectName: string;
   objectType?: string;
+  packageName?: string;
   procedurePattern?: string;
   limit?: number;
   offset?: number;
@@ -62,6 +63,7 @@ export interface SearchProceduresArgs extends MCPToolArgs {
 
 export interface SearchFieldsArgs extends MCPToolArgs {
   objectName: string;
+  packageName?: string;
   fieldPattern?: string;
   limit?: number;
   offset?: number;

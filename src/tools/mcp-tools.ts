@@ -108,13 +108,13 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
           
           // Summary mode: just counts for fields/procedures
           if (args.includeFields && (obj.Type === 'Table' || obj.Type === 'TableExtension')) {
-            const fields = this.database.getTableFields(obj.Name);
+            const fields = this.database.getObjectFields(obj);
             (enriched as any).FieldCount = fields.length;
             (enriched as any).Fields = fields.slice(0, 3); // Show first 3 fields
           }
           
           if (args.includeProcedures) {
-            const procedures = this.database.getObjectProcedures(obj.Name);
+            const procedures = this.database.getObjectProceduresFor(obj);
             if (procedures.length > 0) {
               (enriched as any).ProcedureCount = procedures.length;
               (enriched as any).Procedures = procedures.slice(0, 3); // Show first 3 procedures
@@ -123,7 +123,7 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
         } else {
           // Full mode - include everything but still apply reasonable limits
           if (args.includeFields && (obj.Type === 'Table' || obj.Type === 'TableExtension')) {
-            const fields = this.database.getTableFields(obj.Name);
+            const fields = this.database.getObjectFields(obj);
             (enriched as any).Fields = fields.slice(0, 50); // Max 50 fields
             if (fields.length > 50) {
               (enriched as any).TotalFieldCount = fields.length;
@@ -131,7 +131,7 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
           }
           
           if (args.includeProcedures) {
-            const procedures = this.database.getObjectProcedures(obj.Name);
+            const procedures = this.database.getObjectProceduresFor(obj);
             if (procedures.length > 0) {
               (enriched as any).Procedures = procedures.slice(0, 20); // Max 20 procedures
               if (procedures.length > 20) {
@@ -211,7 +211,7 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
 
       // Add fields for tables
       if ((object.Type === 'Table' || object.Type === 'TableExtension') && (args.includeFields !== false)) {
-        const allFields = this.database.getTableFields(object.Name);
+        const allFields = this.database.getObjectFields(object);
         definition.Fields = allFields.slice(0, fieldLimit);
         if (allFields.length > fieldLimit) {
           (definition as any).TotalFieldCount = allFields.length;
@@ -221,7 +221,7 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
 
       // Add procedures for codeunits
       if (args.includeProcedures !== false) {
-        const allProcedures = this.database.getObjectProcedures(object.Name);
+        const allProcedures = this.database.getObjectProceduresFor(object);
         definition.Procedures = allProcedures.slice(0, procedureLimit);
         if (allProcedures.length > procedureLimit) {
           (definition as any).TotalProcedureCount = allProcedures.length;
@@ -528,6 +528,18 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
   }
 
   /**
+   * Resolve an object name to a single object for member lookups. Prefers base
+   * objects over same-named extensions; an explicit objectType still wins.
+   */
+  private resolveTarget(objectName: string, objectType?: string, packageName?: string) {
+    const preference = objectType
+      ? [objectType]
+      : ['Table', 'Page', 'Codeunit', 'Report', 'Query', 'XmlPort',
+         'TableExtension', 'PageExtension', 'ReportExtension'];
+    return this.database.resolveObjectByName(objectName, preference, packageName);
+  }
+
+  /**
    * Unified search for object members (procedures, fields, controls, dataitems)
    */
   async searchObjectMembers(args: {
@@ -536,6 +548,7 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
     memberType: 'procedures' | 'fields' | 'controls' | 'dataitems';
     pattern?: string;
     group?: string;
+    packageName?: string;
     limit?: number;
     offset?: number;
     includeDetails?: boolean;
@@ -546,6 +559,7 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
         return this.searchProcedures({
           objectName: args.objectName,
           objectType: args.objectType,
+          packageName: args.packageName,
           procedurePattern: args.pattern,
           limit: args.limit,
           offset: args.offset,
@@ -554,6 +568,7 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
       case 'fields':
         return this.searchFields({
           objectName: args.objectName,
+          packageName: args.packageName,
           fieldPattern: args.pattern,
           limit: args.limit,
           offset: args.offset,
@@ -592,16 +607,15 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
       const offset = args.offset || 0;
       const includeDetails = args.includeDetails !== false;
       
-      // Find the object first
-      const objects = this.database.searchObjects(args.objectName, args.objectType);
-      const targetObject = objects.find(obj => obj.Name === args.objectName);
-      
+      // Find the object first. Prefer the base object over a same-named extension.
+      const targetObject = this.resolveTarget(args.objectName, args.objectType, args.packageName);
+
       if (!targetObject) {
         throw new Error(`Object not found: ${args.objectName}`);
       }
 
       // Get all procedures for the object
-      let allProcedures = this.database.getObjectProcedures(targetObject.Name);
+      let allProcedures = this.database.getObjectProceduresFor(targetObject);
       
       // Filter by pattern if provided
       if (args.procedurePattern) {
@@ -670,16 +684,16 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
       const offset = args.offset || 0;
       const includeDetails = args.includeDetails !== false;
       
-      // Find the table
-      const objects = this.database.searchObjects(args.objectName);
-      const targetTable = objects.find(obj => obj.Name === args.objectName && (obj.Type === 'Table' || obj.Type === 'TableExtension'));
+      // Find the table. Prefer the base table over a same-named table extension.
+      const targetTable = this.database.resolveObjectByName(
+        args.objectName, ['Table', 'TableExtension'], args.packageName);
 
       if (!targetTable) {
         throw new Error(`Table or TableExtension not found: ${args.objectName}`);
       }
 
       // Get all fields for the table
-      let allFields = this.database.getTableFields(targetTable.Name);
+      let allFields = this.database.getObjectFields(targetTable);
       
       // Filter by pattern if provided
       if (args.fieldPattern) {
@@ -974,16 +988,15 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
     const startTime = Date.now();
 
     try {
-      // Find the object
-      const objects = this.database.searchObjects(objectName, objectType);
-      const targetObject = objects.find(obj => obj.Name === objectName);
-      
+      // Find the object. Prefer the base object over a same-named extension.
+      const targetObject = this.resolveTarget(objectName, objectType);
+
       if (!targetObject) {
         throw new Error(`Object not found: ${objectName}`);
       }
 
       // Get procedures
-      const allProcedures = this.database.getObjectProcedures(targetObject.Name);
+      const allProcedures = this.database.getObjectProceduresFor(targetObject);
       
       // Categorize procedures using attributes (accurate) and naming patterns (fallback)
       const categories: { [key: string]: { count: number; examples: string[] } } = {};
