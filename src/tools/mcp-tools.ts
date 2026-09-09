@@ -1257,23 +1257,38 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
     }
 
     // Find the object in the symbol database
-    const objects = this.database.searchObjects(args.objectName, args.objectType);
-    const target = objects.find(obj => obj.Name === args.objectName);
+    const target = this.resolveTarget(args.objectName, args.objectType);
 
     if (!target) {
       throw new Error(`Object not found: ${args.objectName}`);
     }
 
-    if (!target.ReferenceSourceFileName) {
+    // An object split across packages by a move has one source reference per
+    // declaration; only some of those packages have their sources on disk. Try each.
+    const declarations = this.database.getDeclarations(target);
+    const references = declarations
+      .map(decl => decl.ReferenceSourceFileName)
+      .filter((ref): ref is string => !!ref);
+
+    if (references.length === 0) {
       throw new Error(`No source file reference for: ${args.objectName}`);
     }
 
-    // Resolve to an actual file
-    const filePath = this.resolveSourceFile(target.ReferenceSourceFileName);
+    let filePath: string | null = null;
+    let usedReference = references[0];
+    for (const reference of references) {
+      const candidate = this.resolveSourceFile(reference);
+      if (candidate) {
+        filePath = candidate;
+        usedReference = reference;
+        break;
+      }
+    }
 
     if (!filePath) {
-      throw new Error(`Source file not found: ${target.ReferenceSourceFileName} (searched in: ${this.sourcePaths.join(', ')})`);
+      throw new Error(`Source file not found: ${references.join(' | ')} (searched in: ${this.sourcePaths.join(', ')})`);
     }
+
 
     const content = fs.readFileSync(filePath, 'utf-8');
     const lines = content.split('\n');
@@ -1295,7 +1310,7 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
 
       return {
         objectName: args.objectName,
-        filePath: target.ReferenceSourceFileName,
+        filePath: usedReference,
         snippet,
         startLine,
         endLine,
@@ -1318,12 +1333,12 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
     }
 
     if (!result) {
-      throw new Error(`Member "${args.memberName}" not found in ${target.ReferenceSourceFileName}`);
+      throw new Error(`Member "${args.memberName}" not found in ${usedReference}`);
     }
 
     return {
       objectName: args.objectName,
-      filePath: target.ReferenceSourceFileName,
+      filePath: usedReference,
       snippet: result.snippet,
       startLine: result.startLine,
       endLine: result.endLine,

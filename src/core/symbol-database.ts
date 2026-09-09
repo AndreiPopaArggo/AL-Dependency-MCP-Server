@@ -26,6 +26,9 @@ export class OptimizedSymbolDatabase implements ALSymbolDatabase {
   private fieldsByTable = new Map<string, ALField[]>();
   private proceduresByObject = new Map<string, ALProcedure[]>();
 
+  // logicalKey() -> every declaration of that one object, across packages.
+  private declarationsByLogicalKey = new Map<string, ALObject[]>();
+
   // Base objects win over extensions when resolving a bare name.
   private static readonly TABLE_TYPE_PREFERENCE = ['Table', 'TableExtension'];
   private static readonly OBJECT_TYPE_PREFERENCE = [
@@ -172,26 +175,87 @@ export class OptimizedSymbolDatabase implements ALSymbolDatabase {
       candidates = candidates.filter(obj => obj.PackageName === packageName);
     }
     for (const type of preferTypes) {
-      const hit = candidates.find(obj => obj.Type === type);
-      if (hit) {
-        return hit;
+      const ofType = candidates.filter(obj => obj.Type === type);
+      if (ofType.length) {
+        // Same object declared by several packages (a move in progress): take the
+        // richest declaration so the pick is deterministic and its
+        // ReferenceSourceFileName points at the package that actually holds the code.
+        return this.getDeclarations(ofType[0]).find(d => ofType.includes(d)) || ofType[0];
       }
     }
     return candidates[0];
   }
 
   /**
-   * Get fields for an already-resolved object (collision-proof).
+   * Identity of one logical AL object. Two packages can declare the SAME object
+   * (same type, id and name) while Microsoft moves it between apps: per
+   * MovedObjectsManifest.json the object moves one way and many of its fields move
+   * the other, so neither declaration is complete on its own. Table 309
+   * "No. Series Line" has 15 distinct fields - Base Application declares 13,
+   * Business Foundation 14.
+   *
+   * Extensions never merge into their base object: they carry a different type and
+   * their own object id.
    */
-  getObjectFields(object: ALObject): ALField[] {
-    return this.fieldsByTable.get(this.memberKey(object)) || [];
+  private logicalKey(object: ALObject): string {
+    return `${object.Type}:${object.Id}:${object.Name.toLowerCase()}`;
   }
 
   /**
-   * Get procedures for an already-resolved object (collision-proof).
+   * Every declaration of the same logical object, richest first so the caller gets
+   * a stable, useful pick.
+   */
+  getDeclarations(object: ALObject): ALObject[] {
+    const decls = this.declarationsByLogicalKey.get(this.logicalKey(object)) || [object];
+    if (decls.length < 2) {
+      return decls;
+    }
+    return [...decls].sort((a, b) => this.memberCount(b) - this.memberCount(a));
+  }
+
+  private memberCount(object: ALObject): number {
+    return (this.fieldsByTable.get(this.memberKey(object)) || []).length
+      + (this.proceduresByObject.get(this.memberKey(object)) || []).length;
+  }
+
+  /**
+   * Union members across every declaration of the object, de-duplicated by member
+   * Id (falling back to Name where a member carries no Id).
+   */
+  private unionMembers<T extends { Id?: number; Name?: string }>(
+    object: ALObject, index: Map<string, T[]>): T[] {
+    const decls = this.getDeclarations(object);
+    if (decls.length < 2) {
+      return index.get(this.memberKey(object)) || [];
+    }
+    const seen = new Set<string | number>();
+    const merged: T[] = [];
+    for (const decl of decls) {
+      for (const member of index.get(this.memberKey(decl)) || []) {
+        const id = member.Id !== undefined ? member.Id : `name:${member.Name}`;
+        if (!seen.has(id)) {
+          seen.add(id);
+          merged.push(member);
+        }
+      }
+    }
+    return merged;
+  }
+
+  /**
+   * Get fields for an already-resolved object (collision-proof; unions the
+   * declarations of a moved object).
+   */
+  getObjectFields(object: ALObject): ALField[] {
+    return this.unionMembers(object, this.fieldsByTable);
+  }
+
+  /**
+   * Get procedures for an already-resolved object (collision-proof; unions the
+   * declarations of a moved object).
    */
   getObjectProceduresFor(object: ALObject): ALProcedure[] {
-    return this.proceduresByObject.get(this.memberKey(object)) || [];
+    return this.unionMembers(object, this.proceduresByObject);
   }
 
   /**
@@ -381,6 +445,7 @@ export class OptimizedSymbolDatabase implements ALSymbolDatabase {
    */
   private indexTypeSpecificData(object: ALObject): void {
     const key = this.memberKey(object);
+    this.addToMapArray(this.declarationsByLogicalKey, this.logicalKey(object), object);
 
     switch (object.Type) {
       case 'Table':
