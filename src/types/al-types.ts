@@ -74,6 +74,9 @@ export interface ALField {
   Name: string;
   TypeDefinition: ALTypeDefinition;
   Properties: ALProperty[];
+  /** Package that declares this member. Set when an object's members are drawn
+   *  from more than one package (a table moved between apps). */
+  SourcePackageName?: string;
 }
 
 export interface ALKey {
@@ -122,6 +125,8 @@ export interface ALVariable {
 export interface ALProcedure {
   Id?: number;
   Name: string;
+  /** Package that declares this member. See ALField.SourcePackageName. */
+  SourcePackageName?: string;
   MethodKind?: number;
   IsLocal?: boolean;
   IsInternal?: boolean;

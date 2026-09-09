@@ -148,6 +148,12 @@ export interface GetDependenciesResult {
 export interface SearchProceduresResult {
   objectName: string;
   objectType: string;
+  /** Package holding the resolved declaration. */
+  packageName?: string;
+  /** Present only when the object's members come from more than one package
+   *  (a table moved between apps); richest declaration first. Each member also
+   *  carries its own SourcePackageName. */
+  contributingPackages?: string[];
   procedures: any[];
   totalFound: number;
   returned: number;
@@ -159,6 +165,13 @@ export interface SearchProceduresResult {
 
 export interface SearchFieldsResult {
   objectName: string;
+  objectType?: string;
+  /** Package holding the resolved declaration. */
+  packageName?: string;
+  /** Present only when the object's members come from more than one package
+   *  (a table moved between apps); richest declaration first. Each member also
+   *  carries its own SourcePackageName. */
+  contributingPackages?: string[];
   fields: any[];
   totalFound: number;
   returned: number;

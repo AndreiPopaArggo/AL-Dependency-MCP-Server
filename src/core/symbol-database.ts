@@ -235,11 +235,25 @@ export class OptimizedSymbolDatabase implements ALSymbolDatabase {
         const id = member.Id !== undefined ? member.Id : `name:${member.Name}`;
         if (!seen.has(id)) {
           seen.add(id);
-          merged.push(member);
+          // Shallow copy: these arrays are the ones hanging off the cached
+          // ALObject, so stamping the original would corrupt the index.
+          merged.push({ ...member, SourcePackageName: decl.PackageName });
         }
       }
     }
     return merged;
+  }
+
+  /**
+   * Packages contributing members to this object, richest declaration first.
+   * More than one entry means the object is split across packages by a move.
+   */
+  getContributingPackages(object: ALObject): string[] {
+    const decls = this.getDeclarations(object);
+    if (decls.length < 2) {
+      return [];
+    }
+    return decls.map(d => d.PackageName || '').filter(Boolean);
   }
 
   /**

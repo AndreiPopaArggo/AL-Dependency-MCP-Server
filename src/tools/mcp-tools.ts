@@ -642,19 +642,23 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
       // Optionally strip details to save tokens
       const procedures = paginatedProcedures.map(proc => {
         if (!includeDetails) {
-          // Return minimal info
-          return {
-            Name: proc.Name
-          };
+          // Return minimal info, but never drop provenance
+          return proc.SourcePackageName
+            ? { Name: proc.Name, SourcePackageName: proc.SourcePackageName }
+            : { Name: proc.Name };
         }
         return proc;
       });
 
       const executionTime = Date.now() - startTime;
 
+      const contributingPackages = this.database.getContributingPackages(targetObject);
+
       return {
         objectName: args.objectName,
         objectType: targetObject.Type,
+        packageName: targetObject.PackageName,
+        ...(contributingPackages.length ? { contributingPackages } : {}),
         procedures,
         totalFound,
         returned: procedures.length,
@@ -723,20 +727,29 @@ NOTE: For documentation and code examples, use microsoft_docs_search or microsof
       // Optionally strip details to save tokens
       const fields = paginatedFields.map(field => {
         if (!includeDetails) {
-          // Return minimal info
-          return {
+          // Return minimal info, but never drop provenance
+          const minimal: any = {
             Id: field.Id,
             Name: field.Name,
             TypeDefinition: field.TypeDefinition
           };
+          if (field.SourcePackageName) {
+            minimal.SourcePackageName = field.SourcePackageName;
+          }
+          return minimal;
         }
         return field;
       });
 
       const executionTime = Date.now() - startTime;
 
+      const contributingPackages = this.database.getContributingPackages(targetTable);
+
       return {
         objectName: args.objectName,
+        objectType: targetTable.Type,
+        packageName: targetTable.PackageName,
+        ...(contributingPackages.length ? { contributingPackages } : {}),
         fields,
         totalFound,
         returned: fields.length,
